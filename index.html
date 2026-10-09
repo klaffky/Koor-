@@ -21,12 +21,13 @@
 <div class="actions"><button id="cancelAdd">Abbrechen</button><button id="saveAdd" class="primary">Reservierung speichern</button></div>
 </div>
 <div id="lists"></div>
-<div class="actions"><button id="share">↗ Liste teilen</button><button id="reset">↻ Häkchen zurücksetzen</button><button id="resetAll">🗑️ Liste vollständig leeren</button></div>
+<div class="actions"><button id="share">↗ Liste teilen</button><button id="reset">↻ Häkchen zurücksetzen</button><button id="resetAll">🗑️ Liste vollständig leeren</button><button id="finishDay" class="primary">✓ Tagesabschluss & neuen Tag starten</button></div>
+<div class="panel"><button id="toggleArchive" style="width:100%">🗂️ Tagesarchiv anzeigen</button><div id="archivePanel" class="hidden" style="margin-top:14px"><div id="archiveList"></div></div></div>
 <footer>Häkchen und Liste werden lokal in diesem Browser gespeichert und nicht automatisch zwischen Geräten synchronisiert. Für die KI-Erkennung muss der eingerichtete KI-Dienst erreichbar sein.</footer></main>
 <script>
 const KEY="service-abhakliste-empty-v2";
-// Neustart: alte voreingestellte Reservierungen und das alte Tagesarchiv entfernen.
-try{localStorage.removeItem("service-abhakliste-v1");localStorage.removeItem("service-abhakliste-archive-v1");}catch(e){}
+const ARCHIVE_KEY="service-abhakliste-archive-v2";
+let archive=[];try{archive=JSON.parse(localStorage.getItem(ARCHIVE_KEY))||[]}catch(e){archive=[]}
 let bookings=[];try{const raw=localStorage.getItem(KEY);if(raw!==null){const v=JSON.parse(raw);if(Array.isArray(v))bookings=v;}}catch(e){bookings=[];}
 const $=id=>document.getElementById(id);function save(){try{localStorage.setItem(KEY,JSON.stringify(bookings));$("saved").textContent="Gespeichert ✓"}catch(e){$("saved").textContent="Speichern fehlgeschlagen"}}
 function stats(){let d=bookings.filter(x=>x.done).length,t=bookings.length,people=bookings.reduce((sum,x)=>sum+(Number(x.people)||0),0);$("count").textContent=d+" von "+t+" erledigt";$("remaining").textContent=(t-d)+" offen";$("totalPeople").textContent="👥 "+people+" Personen insgesamt";$("progress").style.width=(t?100*d/t:0)+"%"}
@@ -78,7 +79,7 @@ $("saveAdd").onclick=()=>{
  const time=$("newTime").value,people=Number($("newPeople").value),table=$("newTable").value.trim();
  if(!time||!Number.isInteger(people)||people<1||people>100){alert("Bitte Uhrzeit und eine Personenanzahl zwischen 1 und 100 eingeben.");return}
  const note=table?("Tisch "+table):"";
- bookings.push({id:"manual"+Date.now(),group:"Neue Liste",time,people,note,done:false});
+ bookings.push({id:"manual"+Date.now(),group:"Neue Liste",time,people,table, note:"",done:false});
  // Keep manually added reservations in a single list and show them chronologically.
  bookings.forEach(x=>{if(!x.group)x.group="Neue Liste"});
  save();render();$("addPanel").classList.add("hidden");$("newPeople").value="2";$("newTable").value="";
@@ -87,6 +88,32 @@ $("saveAdd").onclick=()=>{
 $("camera").onchange=e=>handle(e.target.files[0]);$("upload").onchange=e=>handle(e.target.files[0]);
 $("reset").onclick=()=>{if(confirm("Alle Häkchen zurücksetzen?")){bookings.forEach(x=>x.done=false);save();render()}};
 $("resetAll").onclick=()=>{if(confirm("Wirklich alle Reservierungen löschen? Die Liste wird vollständig geleert und die Gesamtpersonenzahl auf 0 gesetzt.")){bookings=[];save();render();$("addPanel").classList.add("hidden");$("review").classList.add("hidden");$("preview").classList.add("hidden");$("camera").value="";$("upload").value="";setStatus("Alles leer. Du kannst neue Reservierungen eintragen.");}};
-$("share").onclick=async()=>{let text=bookings.map(x=>(x.done?"[x] ":"[ ] ")+x.time+" · "+x.people+" Personen").join("\n");if(navigator.share){try{await navigator.share({title:"Service-Abhakliste",text})}catch(e){}}else{try{await navigator.clipboard.writeText(text);alert("Liste kopiert")}catch(e){alert(text)}}};
+$("share").onclick=async()=>{let text=bookings.map(x=>(x.done?"[x] ":"[ ] ")+x.time+" · "+x.people+" Personen"+(x.table?" · Tisch "+x.table:"")).join("\n");if(navigator.share){try{await navigator.share({title:"Service-Abhakliste",text})}catch(e){}}else{try{await navigator.clipboard.writeText(text);alert("Liste kopiert")}catch(e){alert(text)}}};
+
+$("finishDay").onclick=()=>{
+ if(!bookings.length){alert("Die aktuelle Liste ist leer. Du kannst direkt neue Reservierungen eintragen.");return}
+ const date=new Date().toLocaleDateString("de-DE");
+ const people=bookings.reduce((sum,x)=>sum+(Number(x.people)||0),0);
+ if(!confirm("Den Service-Tag vom "+date+" abschließen? Die aktuelle Liste wird im Tagesarchiv gespeichert und danach geleert."))return;
+ archive.unshift({date,closedAt:new Date().toISOString(),totalBookings:bookings.length,totalPeople:people,doneCount:bookings.filter(x=>x.done).length,items:bookings.map(x=>({...x}))});
+ try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify(archive))}catch(e){alert("Das Archiv konnte nicht gespeichert werden. Möglicherweise ist der lokale Speicher voll.");return}
+ bookings=[];save();render();renderArchive();
+ alert("Tag archiviert! Die Liste ist bereit für den neuen Service.");
+};
+$("toggleArchive").onclick=()=>{$("archivePanel").classList.toggle("hidden");renderArchive();$("toggleArchive").textContent=$("archivePanel").classList.contains("hidden")?"🗂️ Tagesarchiv anzeigen":"🗂️ Tagesarchiv ausblenden"};
+function renderArchive(){
+ const root=$("archiveList");if(!root)return;root.innerHTML="";
+ if(!archive.length){root.textContent="Noch keine abgeschlossenen Tage.";return}
+ archive.forEach(day=>{
+  const card=document.createElement("div");card.style.cssText="padding:12px 0;border-bottom:1px solid var(--line)";
+  const title=document.createElement("strong");title.textContent=day.date+" · "+day.totalBookings+" Reservierungen · "+day.totalPeople+" Personen";
+  const detail=document.createElement("div");detail.className="small";detail.textContent=(day.doneCount||0)+" abgehakt";
+  const btn=document.createElement("button");btn.textContent="Details anzeigen";btn.style.marginTop="8px";
+  const details=document.createElement("div");details.className="small hidden";details.style.marginTop="8px";
+  details.textContent=(day.items||[]).map(x=>(x.done?"✓ ":"○ ")+x.time+" · "+x.people+" Personen"+(x.table?" · Tisch "+x.table:"")+(x.note?" · "+x.note:"")).join("\n");details.style.whiteSpace="pre-line";
+  btn.onclick=()=>{details.classList.toggle("hidden");btn.textContent=details.classList.contains("hidden")?"Details anzeigen":"Details ausblenden"};
+  card.append(title,detail,btn,details);root.append(card);
+ });
+}
 save();render();
 </script></body></html>
